@@ -1,0 +1,61 @@
+ID,img_path,Question,A,B,C,D
+TEST_000,./input_images/TEST_000.jpg,What might be the purpose of the person's workout in the image?,Building muscle and strength,Practicing for a marathon,Training for a cycling race,Preparing for a swimming competition
+TEST_001,./input_images/TEST_001.jpg,What color is the shoe rack in the image?,Black,Brown,White,Blue
+TEST_002,./input_images/TEST_002.jpg,What might be the deer's behavior in the image?,Eating,Sleeping,Standing,Running
+TEST_003,./input_images/TEST_003.jpg,"Considering the equipment used in the image, what type of gym might this likely be?",A Pilates studio,A yoga studio,A CrossFit gym,A boxing gym
+TEST_004,./input_images/TEST_004.jpg,What is a common ingredient in Gimbap (Korean sushi roll)?,Cheese,Pickled radish,Tomato,Bacon
+TEST_005,./input_images/TEST_005.jpg,What is the main color of the flowers in the image?,Yellow,Pink,White,Blue
+TEST_006,./input_images/TEST_006.jpg,What is the typical habitat of the type of deer in the image?,Rainforest,Desert,Forest,Ocean
+TEST_007,./input_images/TEST_007.jpg,What is the likely purpose of the room in the image?,For exercising,For studying,For sleeping,For dining
+TEST_008,./input_images/TEST_008.jpg,"Based on the image, which type of athletic footwear is most suitable for the activity depicted?",Swim fins,Running shoes,Basketball shoes,Snow boots
+TEST_009,./input_images/TEST_009.jpg,What is the main color of the squirrel in the image?,Black,White,Brown,Gray
+TEST_010,./input_images/TEST_010.jpg,What is the primary object in the image?,A pair of shoes,A bicycle,A car,A skateboard
+TEST_011,./input_images/TEST_011.jpg,What would you typically find in a library like the one in the image?,Books and study materials,Cooking utensils,Beds and wardrobes,Exercise equipment
+TEST_012,./input_images/TEST_012.jpg,What is the main color of the decorations in the image?,Green,Yellow,Red,Blue
+TEST_013,./input_images/TEST_013.jpg,"Based on the image, what can be inferred about the climber's physical condition?",The climber is physically fit.,The climber is unfit.,The climber is injured.,The climber is elderly.
+TEST_014,./input_images/TEST_014.jpg,What time of the day was the photo likely taken?,Afternoon,Morning,Night,Evening
+TEST_015,./input_images/TEST_015.jpg,What is the likely activity the skateboard is being used for?,Participating in a race,Performing tricks at a skate park,Casual ride in the neighborhood,Commuting to work
+TEST_016,./input_images/TEST_016.jpg,"According to Korean cuisine, which side dish often accompanies this kind of main dish?",Salad,Miso soup,French fries,Kimchi
+TEST_017,./input_images/TEST_017.jpg,What is the usual material used to construct the surface of a skateboard like the one in the image?,Plastic,Maple wood,Bamboo,Metal
+TEST_018,./input_images/TEST_018.jpg,What type of ecosystem is typically found at a beach?,Forest,Desert,Marine,Grassland
+TEST_019,./input_images/TEST_019.jpg,Why might the people in the image be hiking?,For a school field trip,For exercise and relaxation,To have a picnic,To get to work
+TEST_020,./input_images/TEST_020.jpg,What is the likely setting based on the image?,A traditional Korean restaurant,A sushi bar,A home kitchen,A fast food restaurant
+TEST_021,./input_images/TEST_021.jpg,What might be the squirrel's activity in the image?,Sleeping,Eating,Climbing,Running
+TEST_022,./input_images/TEST_022.jpg,What time of the day is it likely to be in the image?,Night,Morning,Evening,Noon
+TEST_023,./input_images/TEST_023.jpg,What is the main activity shown in the image?,Hiking,Jogging,Rock Climbing,Swimming
+TEST_024,./input_images/TEST_024.jpg,"Considering the number and variety of shoes, what can be inferred about the number of people living in this household?",Three people.,Four or more people.,One person.,Two people.
+TEST_025,./input_images/TEST_025.jpg,What color are the bookshelves in the image?,Blue,Brown,Green,Red
+TEST_026,./input_images/TEST_026.jpg,Which type of fishing equipment is commonly used in the activity shown in the image?,A fishing trap,A fishing spear,A fishing net,A fishing rod
+TEST_027,./input_images/TEST_027.jpg,What is the average lifespan of a squirrel in the wild?,1-2 years,10-15 years,5-10 years,20-25 years
+TEST_028,./input_images/TEST_028.jpg,What type of clothing is most suitable for the activity shown in the image?,Chef's uniform,Formal attire,Swimwear,Comfortable and breathable outdoor clothing
+TEST_029,./input_images/TEST_029.jpg,What is the primary activity being performed in the image?,Running,Swimming,Weight lifting,Cycling
+TEST_030,./input_images/TEST_030.jpg,What is the color of the bookshelves in the image?,Brown,Black,Blue,White
+TEST_031,./input_images/TEST_031.jpg,What is a common activity people do when camping?,Shopping,Roasting marshmallows,Swimming,Skiing
+TEST_032,./input_images/TEST_032.jpg,What is the main activity being performed in the image?,Running,Swimming,Fishing,Hiking
+TEST_033,./input_images/TEST_033.jpg,What is the main color of the tent in the image?,Red,Green,Yellow,Blue
+TEST_034,./input_images/TEST_034.jpg,In which country is cherry blossom viewing highly celebrated?,Canada,Brazil,Egypt,Japan
+TEST_035,./input_images/TEST_035.jpg,What kind of activities are popular at the beach?,Ice skating,Skiing,Sunbathing and swimming,Mountain climbing
+TEST_036,./input_images/TEST_036.jpg,What is the main activity taking place in the image?,Swimming,Reading,Cooking,Hiking
+TEST_037,./input_images/TEST_037.jpg,What is the likely occasion for the decorations depicted in the image?,Halloween,Valentine's Day,Christmas,Easter
+TEST_038,./input_images/TEST_038.jpg,"In some cultures, why is it important to remove shoes before entering a home?",To show respect to the host,Both A and B,No specific reason,To avoid bringing dirt and germs into the house
+TEST_039,./input_images/TEST_039.jpg,"What is a crucial piece of equipment for rock climbing, visible in the image?",Ski poles,Scuba gear,Bicycle,Climbing helmet
+TEST_040,./input_images/TEST_040.jpg,What kind of food is presented in the image?,Korean dish,Pasta,Pizza,Sushi
+TEST_041,./input_images/TEST_041.jpg,What color is the sky in the image?,Black,Blue,Green,Red
+TEST_042,./input_images/TEST_042.jpg,What color is the majority of the shoes in the shoe rack?,Black,Brown,Red,White
+TEST_043,./input_images/TEST_043.jpg,"Considering the books and the study environment, what might be a common etiquette rule in this place?",Food and drinks are allowed everywhere,Silence is generally maintained,Yelling is encouraged,Running around is permitted
+TEST_044,./input_images/TEST_044.jpg,"Considering the category of the image, what might be the main ingredient of the dish?",Pork,Fish,Chicken,Beef
+TEST_045,./input_images/TEST_045.jpg,What is the predominant color in the image?,Yellow,Green,Blue,Red
+TEST_046,./input_images/TEST_046.jpg,What is the main dish in the image?,Pizza,Pasta,Burger,Gimbap (Korean sushi roll)
+TEST_047,./input_images/TEST_047.jpg,What time of day is it likely in the image?,Night,Afternoon,Evening,Morning
+TEST_048,./input_images/TEST_048.jpg,What is the most likely purpose of this room?,For exercising,For studying,For sleeping,For cooking
+TEST_049,./input_images/TEST_049.jpg,What type of shoes are likely to be stored in this shoe rack?,Running shoes,High heels,All of the above,Slippers
+TEST_050,./input_images/TEST_050.jpg,What might be the reason this image was taken?,To capture a rare animal in the wild,To document a natural disaster,To appreciate the beauty of cherry blossoms,To highlight the beauty of the night sky
+TEST_051,./input_images/TEST_051.jpg,What is the color of the deer in the image?,Gray,Black,Brown,White
+TEST_052,./input_images/TEST_052.jpg,"Considering the shoe rack style, which country is this shoe rack commonly found in?",USA,Brazil,Korea,France
+TEST_053,./input_images/TEST_053.jpg,What is the likely setting of the photo?,Forest trail,City street,Outdoor running track,Indoor gym
+TEST_054,./input_images/TEST_054.jpg,What is the primary color of the bookshelves in the image?,Green,White,Brown,Blue
+TEST_055,./input_images/TEST_055.jpg,What could be a possible purpose of the room in the image?,Cooking,Dining,Studying,Exercising
+TEST_056,./input_images/TEST_056.jpg,What might be the purpose of the person in the image doing the activity?,For exercise or health,For competition,For professional work,For leisure or relaxation
+TEST_057,./input_images/TEST_057.jpg,What type of exercise is the person in the image doing?,Running,Weightlifting,Cycling,Swimming
+TEST_058,./input_images/TEST_058.jpg,Which country is known for popularizing the tradition of decorating Christmas trees?,Germany,United States,France,Russia
+TEST_059,./input_images/TEST_059.jpg,Which of the following rules is usually applied in libraries?,Play music,Eat snacks,Speak loudly,Keep silence
