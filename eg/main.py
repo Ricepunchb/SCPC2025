@@ -9,7 +9,8 @@ from PIL import Image
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
+from sklearn.model_selection import StratifiedKFold
 from transformers import (InstructBlipForConditionalGeneration,
                           T5ForConditionalGeneration,
                           InstructBlipConfig,
@@ -169,8 +170,8 @@ valid_dataloader = DataLoader(val_ds, batch_size=batch_size, collate_fn = collat
 # --- 1번째 훈련 루프 ---
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
 scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
-# num_epochs = 10
-num_epochs = 1
+
+num_epochs = 5 
 patience = 3
 min_eval_loss = float("inf")
 early_stopping_hook = 0
@@ -261,109 +262,129 @@ for epoch in range(num_epochs):
             break
 
 
+
 # 중간 메모리 정리
 del train_ds, train_dataloader
 torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
 
+
 # DACON 에서 준 중요한 데이터셋
-dacon_ds = load_dataset("csv",  data_files="./train.csv", split='train')
-dacon_ds = DaconDataset(dataset=dacon_ds, processor=processor)
-dacon_dataloader = DataLoader(dacon_ds, batch_size=batch_size, collate_fn = collate_fn, shuffle=True, pin_memory=True, num_workers=4)
+dacon_ds = load_dataset("csv",  data_files="eg/train.csv", split='train')
+indices = list(range(len(dacon_ds)))        # 전체 데이터 인덱스 및 라벨 추출
+labels = [dacon_ds[i]['answer'] for i in indices]  # A/B/C/D 라벨
 
 # --- 2번째 훈련 루프 ---
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-6, weight_decay=0.05)
-scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
-# num_epochs = 3
-num_epochs = 1
-min_eval_loss = float("inf")
-early_stopping_hook = 0
-tracking_information = []
-gradient_accumulation_steps = 128 // batch_size
+# Stratified K-Fold 설정
+n_splits = 5
+skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
 
-for epoch in range(num_epochs):
-    # ========================= Training =========================
-    model.train()
-    
-    step = 1
-    epoch_loss = 0
-    
-    for batch in tqdm(dacon_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]"):
-        pixel_values = batch.pop("pixel_values").to(device)
-        input_ids = batch.pop("input_ids").to(device)
-        qformer_input_ids = batch.pop('qformer_input_ids').to(device)
-        qformer_attention_mask = batch.pop('qformer_attention_mask').to(device)
-        labels = batch.pop('labels').to(device)
+# 학습 설정
+num_epochs = 20
+patience = 2
 
-        outputs = model(
-            input_ids=input_ids,
-            pixel_values=pixel_values,
-            qformer_input_ids=qformer_input_ids,
-            qformer_attention_mask=qformer_attention_mask,
-            labels=labels
+model.to(device)
+
+fold_results = []
+
+for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1):
+    print(f"\n===== Fold {fold}/{n_splits} =====")
+    # Subset 및 DataLoader
+    train_subset = Subset(dacon_ds, train_idx.tolist())
+    val_subset = Subset(dacon_ds, val_idx.tolist())
+    train_subset = DaconDataset(dataset=train_subset, processor=processor)
+    val_subset = DaconDataset(dataset=val_subset, processor=processor)
+    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True, num_workers=4)
+    val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, pin_memory=True, num_workers=4)
+
+    # Optimizer 및 Scheduler 초기화
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-6, weight_decay=0.05)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+
+    best_val_loss = float('inf')
+    patience_counter = 0
+
+    for epoch in range(1, num_epochs + 1):
+        # ----- Training -----
+        model.train()
+        optimizer.zero_grad()
+        total_train_loss = 0
+
+        for batch in tqdm(train_loader, desc=f"Fold {fold} Epoch {epoch} [Train]"):
+            # Move to device
+            for k, v in batch.items():
+                batch[k] = v.to(device)
+
+            outputs = model(
+                pixel_values=batch['pixel_values'],
+                input_ids=batch['input_ids'],
+                qformer_input_ids=batch['qformer_input_ids'],
+                qformer_attention_mask=batch['qformer_attention_mask'],
+                labels=batch['labels']
             )
-        loss = outputs.loss
-        loss /= gradient_accumulation_steps
+            loss = outputs.loss 
+            loss.backward()
 
-        # 역전파
-        loss.backward()
-        
-        if step % gradient_accumulation_steps == 0 or step == len(dacon_dataloader):
             optimizer.step()
             optimizer.zero_grad()
-        
-        epoch_loss += loss.item() * gradient_accumulation_steps
-        step += 1
 
-    # ========================= Validation =========================
-    model.eval()
-    eval_loss = 0
-    with torch.no_grad():
-        for batch in tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Validation]"):
+            total_train_loss += loss.item()
 
-            pixel_values = batch.pop("pixel_values").to(device)
-            input_ids = batch.pop("input_ids").to(device)
-            qformer_input_ids = batch.pop('qformer_input_ids').to(device)
-            qformer_attention_mask = batch.pop('qformer_attention_mask').to(device)
-            labels = batch.pop('labels').to(device)
-    
-            outputs = model(
-                input_ids=input_ids,
-                pixel_values=pixel_values,
-                qformer_input_ids=qformer_input_ids,
-                qformer_attention_mask=qformer_attention_mask,
-                labels=labels
+        avg_train_loss = total_train_loss / len(train_loader)
+
+        # ----- Validation -----
+        model.eval()
+        total_val_loss = 0
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc=f"Fold {fold} Epoch {epoch} [Val]"):
+                for k, v in batch.items():
+                    batch[k] = v.to(device)
+                outputs = model(
+                    pixel_values=batch['pixel_values'],
+                    input_ids=batch['input_ids'],
+                    qformer_input_ids=batch['qformer_input_ids'],
+                    qformer_attention_mask=batch['qformer_attention_mask'],
+                    labels=batch['labels']
                 )
-            loss = outputs.loss
-            
-            eval_loss += loss.item()
+                total_val_loss += outputs.loss.item()
 
-    # --- 에포크 마무리 및 로깅 ---
-    avg_train_loss = epoch_loss / len(dacon_dataloader)
-    avg_eval_loss = eval_loss / len(valid_dataloader)
-    current_lr = optimizer.param_groups[0]["lr"]
+        avg_val_loss = total_val_loss / len(val_loader)
+        current_lr = optimizer.param_groups[0]['lr']
 
-    tracking_information.append((avg_train_loss, avg_eval_loss, current_lr))
-    print(f"Epoch: {epoch+1} | Train Loss: {avg_train_loss:.4f} | Eval Loss: {avg_eval_loss:.4f} | LR: {current_lr}")
-    
-    # 스케줄러 업데이트
-    scheduler.step()
+        print(f"Fold {fold} Epoch {epoch} | "
+              f"Train Loss: {avg_train_loss:.4f} | "
+              f"Val Loss: {avg_val_loss:.4f} | "
+              f"LR: {current_lr:.1e}")
 
-    # 조기 종료 및 모델 저장
-    # Early stopping은 전체 loss 합이 아닌 평균 loss로 비교하는 것이 더 직관적입니다.
-    if avg_eval_loss < min_eval_loss:
-        min_eval_loss = avg_eval_loss
-        early_stopping_hook = 0
-        model.save_pretrained("Model/instructblip-lora")
-        model.base_model.save_pretrained('Model/instructblip-base')
-        processor.save_pretrained("Model/instructblip-processor")
-        print(f"Validation loss decreased ({min_eval_loss:.4f}). Saving model...")
+        scheduler.step()
+
+        # Early Stopping
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_counter = 0
+            # 체크포인트 저장
+            model.save_pretrained('./Model/instructblip-lora')
+            model.base_model.save_pretrained('./Model/instructblip-base')
+            processor.save_pretrained('./Model/instructblip-processor')
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"Early stopping at epoch {epoch} for fold {fold}")
+                break
+
+    fold_results.append(best_val_loss)
+
+# K-Fold 결과 요약
+print("\n===== K-Fold Summary =====")
+for i, loss in enumerate(fold_results, start=1):
+    print(f"Fold {i} Best Val Loss: {loss:.4f}")
+print(f"Mean Val Loss: {sum(fold_results)/len(fold_results):.4f}")
         
         
 
 
 # 추론
-test = pd.read_csv('./test.csv')
+test = pd.read_csv('eg/test.csv')
 results = []
 
 # 정답 알파벳 추출 함수
@@ -373,7 +394,7 @@ def extract_answer_letter(text):
 
 
 for _, row in tqdm(test.iterrows(), total=len(test)):
-    image = Image.open(row['img_path']).convert("RGB")
+    image = Image.open('eg/'+row['img_path']).convert("RGB")
     choices = [row[c] for c in ['A', 'B', 'C', 'D']]
 
     prompt = (
@@ -387,21 +408,23 @@ for _, row in tqdm(test.iterrows(), total=len(test)):
 
     inputs = processor(images=image, text=prompt, padding="max_length", max_length=512, truncation=True, return_tensors="pt").to(device)
 
-    output = model.generate(**inputs, 
-                            num_beams=5, 
-                            top_p=0.9, 
-                            repetition_penalty=1.5, 
-                            length_penalty=1.0, 
-                            temperature=0.7, 
-                            max_new_tokens=3, 
-                            do_sample=False)
+    output = model.generate(
+        **inputs,
+        do_sample=False,       # 샘플링 비활성화 (결정론적 빔 서치)
+        num_beams=8,           # 8개의 빔을 사용하여 탐색
+        early_stopping=True,   # 빔이 EOS에 도달하면 일찍 중지
+        max_new_tokens=20,     # 생성할 최대 새 토큰 수
+        min_length=1,
+        repetition_penalty=1.2,
+        length_penalty=0.8,    # 적절한 길이의 답변 유도
+        )
     decoded = processor.tokenizer.decode(output[0], skip_special_tokens=True).strip()
     print(decoded)
     results.append(extract_answer_letter(decoded))
 
 print('✅ Inference Done.')
 
-submission = pd.read_csv('./sample_submission.csv')
+submission = pd.read_csv('eg/sample_submission.csv')
 submission['answer'] = results
-submission.to_csv('./baseline_submit.csv', index=False)
+submission.to_csv('eg/baseline_submit.csv', index=False)
 print("✅ CSV for submission Done.")
