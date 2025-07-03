@@ -94,7 +94,7 @@ class DaconDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         # get image + text
         sample = self.dataset[idx]
-        image = Image.open(sample['img_path']).convert("RGB")
+        image = Image.open('eg/'+sample['img_path']).convert("RGB")
         answer = sample[sample['answer'].strip()]
         
         prompt = f"""
