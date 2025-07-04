@@ -99,7 +99,6 @@ class DaconDataset(torch.utils.data.Dataset):
     
     
 # Visual 7w 데이터셋
-# 커스텀 데이터셋
 class VisualDataset(torch.utils.data.Dataset):
     """Visual 7w dataset."""
 
@@ -114,7 +113,7 @@ class VisualDataset(torch.utils.data.Dataset):
         # get image + text
         sample = self.dataset[idx]
         answer = sample['answer']
-        answer_idx = sample['choices'].index(answer)
+        answer_idx = sample['answer_idx']
         image = Image.open(sample['img_path']).convert("RGB")
         prompt = f"""
         <image>
