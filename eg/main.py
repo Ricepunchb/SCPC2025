@@ -7,6 +7,8 @@ import pandas as pd
 from tqdm import tqdm
 from PIL import Image
 
+import wandb
+
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Subset
@@ -19,11 +21,10 @@ from transformers import (InstructBlipForConditionalGeneration,
                           InstructBlipQFormerConfig, 
                           T5Config,
                           T5Tokenizer)
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from peft import LoraConfig, get_peft_model
 
-from customdatasets import AokvqaDataset, DaconDataset, collate_fn
-
+from customdatasets import AokvqaDataset, DaconDataset, VisualDataset, collate_fn
 
 
 # 환경 설정
@@ -137,13 +138,28 @@ del tokenizer   # 메모리 정리
 
 
 # PEFT-LoRA 적용
-target_module_names = []
-for name, module in model.named_modules():
-    if ("qformer" in name or "language_model" in name) and isinstance(module, (nn.Linear, nn.Embedding)):   # Qformer와 langauge모델만 훈련
-        target_module_names.append(name.split('.')[-1]) 
+target_module_names = [
+    # Q-Former 내의 선형 레이어 (BERT-like 구조)
+    "query",            # Q-Former 어텐션의 쿼리 프로젝션
+    "key",              # Q-Former 어텐션의 키 프로젝션
+    "value",            # Q-Former 어텐션의 값 프로젝션
+    "attention.output.dense", # Q-Former 어텐션의 출력 밀집 레이어
+    "intermediate.dense", # Q-Former FFN의 중간 밀집 레이어
+    "output.dense",       # Q-Former FFN의 출력 밀집 레이어
 
-# 중복 제거
-target_module_names = list(set(target_module_names))
+    # Language Model (Flan-T5-large) 내의 선형 레이어
+    "q",                # T5 어텐션의 쿼리 프로젝션
+    "k",                # T5 어텐션의 키 프로젝션
+    "v",                # T5 어텐션의 값 프로젝션
+    "o",                # T5 어텐션의 출력 프로젝션
+    "wi_0",             # T5 FFN의 중간 레이어 1
+    "wi_1",             # T5 FFN의 중간 레이어 2 (Gated FFN의 경우)
+    "wo",               # T5 FFN의 출력 레이어
+
+    # InstructBLIP 특정 레이어
+    "language_projection", # 당신이 정의한 Q-Former -> LLM 연결 projection 레이어
+    "lm_head"             # 언어 모델의 최종 출력 헤드
+]
 
 lora_config = LoraConfig(
     r=16, 
@@ -155,11 +171,16 @@ lora_config = LoraConfig(
 model = get_peft_model(model, lora_config)
 print(model.print_trainable_parameters())
 
+del target_module_names     # 중간 메모리 정리
 
+# WandB 시동
+wandb.init(project="SCPC 2025")
+wandb.watch(model, log="all", log_freq=50)
+wandb.config.update({"nparams": sum([p.numel() for p in model.parameters() if p.requires_grad])})
 
-# A-OKVQA로 파인튜닝
 batch_size = 2
 
+# A-OKVQA로 파인튜닝
 train_ds = load_dataset("HuggingFaceM4/A-OKVQA", split="train")
 val_ds = load_dataset("HuggingFaceM4/A-OKVQA", split="validation")
 train_ds = AokvqaDataset(dataset=train_ds, processor=processor)
@@ -185,7 +206,7 @@ for epoch in range(num_epochs):
     step = 1
     epoch_loss = 0
     
-    for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]"):
+    for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]", dynamic_ncols=True):
         pixel_values = batch.pop("pixel_values").to(device)
         input_ids = batch.pop("input_ids").to(device)
         qformer_input_ids = batch.pop('qformer_input_ids').to(device)
@@ -205,18 +226,19 @@ for epoch in range(num_epochs):
         # 역전파
         loss.backward()
         
-        if step%gradient_accumulation_steps == 0 or step == len(train_dataloader):
+        if step % gradient_accumulation_steps == 0 or step == len(train_dataloader):
             optimizer.step()
             optimizer.zero_grad()
         
         epoch_loss += loss.item() * gradient_accumulation_steps
+        
         step += 1
 
     # ========================= Validation =========================
     model.eval()
     eval_loss = 0
     with torch.no_grad():
-        for batch in tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Validation]"):
+        for batch in tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Validation]", dynamic_ncols=True):
 
             pixel_values = batch.pop("pixel_values").to(device)
             input_ids = batch.pop("input_ids").to(device)
@@ -235,6 +257,7 @@ for epoch in range(num_epochs):
             
             eval_loss += loss.item()
 
+
     # --- 에포크 마무리 및 로깅 ---
     avg_train_loss = epoch_loss / len(train_dataloader)
     avg_eval_loss = eval_loss / len(valid_dataloader)
@@ -242,6 +265,12 @@ for epoch in range(num_epochs):
 
     tracking_information.append((avg_train_loss, avg_eval_loss, current_lr))
     print(f"Epoch: {epoch+1} | Train Loss: {avg_train_loss:.4f} | Eval Loss: {avg_eval_loss:.4f} | LR: {current_lr}")
+    
+    # WandB 로깅
+    wandb.log({"A-OKVQA/epoch/train_loss": avg_train_loss,
+               "A-OKVQA/epoch/val_loss": avg_eval_loss,
+               "A-OKVQA/LR": current_lr,
+               "A-OKVQA/epoch": epoch+1 })
     
     # 스케줄러 업데이트
     scheduler.step()
@@ -264,8 +293,150 @@ for epoch in range(num_epochs):
 
 
 # 중간 메모리 정리
-del train_ds, train_dataloader
+del train_ds, train_dataloader, val_ds, valid_dataloader
 torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+
+
+# Visual 7w 데이터셋
+visual_ds = load_dataset("json", data_files="/mnt/workspace/datasets/visual7w/dataset_v7w_telling.json", split='train')
+# 데이터셋 전처리
+processed = []
+for sample in visual_ds:
+    sample = sample['images']
+    image_name = sample['filename']
+    
+    for i in range(len(sample['qa_pairs'])):
+        answer_idx = np.random.randint(0,4)
+        choices = sample['qa_pairs'][i]['multiple_choices']
+        choices.insert(answer_idx, sample['qa_pairs'][i]['answer'])
+        processed.append({'question': sample['qa_pairs'][i]['question'],
+                          'answer': sample['qa_pairs'][i]['answer'],
+                          'answer_idx': answer_idx,
+                          'choices': choices,
+                          'img_path': f'datasets/visual7w/images/{image_name}'   })
+
+del visual_ds   # 중간 메모리 정리
+
+processed = Dataset.from_list(processed)
+processed = processed.class_encode_column('answer_idx').train_test_split(test_size=0.2, stratify_by_column='answer_idx')
+train_ds, val_ds = processed['train'], processed['test']
+train_ds = VisualDataset(dataset=train_ds, processor=processor)
+val_ds = VisualDataset(dataset=val_ds, processor=processor)
+train_dataloader = DataLoader(train_ds, batch_size=batch_size, collate_fn = collate_fn, shuffle=True, pin_memory=True, num_workers=4)
+valid_dataloader = DataLoader(val_ds, batch_size=batch_size, collate_fn = collate_fn, shuffle=False, pin_memory=True, num_workers=4)
+
+del processed   # 중간 메모리 정리
+
+# --- 2번째 훈련 루프 ---
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
+
+num_epochs = 5
+patience = 3
+min_eval_loss = float("inf")
+early_stopping_hook = 0
+tracking_information = []
+gradient_accumulation_steps = 128 // batch_size
+
+model.to(device)
+
+for epoch in range(num_epochs):
+    # ========================= Training =========================
+    model.train()
+    
+    step = 1
+    epoch_loss = 0
+    
+    for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]", dynamic_ncols=True):
+        pixel_values = batch.pop("pixel_values").to(device)
+        input_ids = batch.pop("input_ids").to(device)
+        qformer_input_ids = batch.pop('qformer_input_ids').to(device)
+        qformer_attention_mask = batch.pop('qformer_attention_mask').to(device)
+        labels = batch.pop('labels').to(device)
+
+        outputs = model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            qformer_input_ids=qformer_input_ids,
+            qformer_attention_mask=qformer_attention_mask,
+            labels=labels
+            )
+        loss = outputs.loss
+        loss /= gradient_accumulation_steps
+
+        loss.backward()
+        
+        if step % gradient_accumulation_steps == 0 or step == len(train_dataloader):
+            optimizer.step()
+            optimizer.zero_grad()
+        
+        epoch_loss += loss.item() * gradient_accumulation_steps
+        
+        step += 1
+
+    # ========================= Validation =========================
+    model.eval()
+    eval_loss = 0
+    with torch.no_grad():
+        for batch in tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Validation]", dynamic_ncols=True):
+
+            pixel_values = batch.pop("pixel_values").to(device)
+            input_ids = batch.pop("input_ids").to(device)
+            qformer_input_ids = batch.pop('qformer_input_ids').to(device)
+            qformer_attention_mask = batch.pop('qformer_attention_mask').to(device)
+            labels = batch.pop('labels').to(device)
+    
+            outputs = model(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                qformer_input_ids=qformer_input_ids,
+                qformer_attention_mask=qformer_attention_mask,
+                labels=labels
+                )
+            loss = outputs.loss
+            
+            eval_loss += loss.item()
+
+
+    # --- 에포크 마무리 및 로깅 ---
+    avg_train_loss = epoch_loss / len(train_dataloader)
+    avg_eval_loss = eval_loss / len(valid_dataloader)
+    current_lr = optimizer.param_groups[0]["lr"]
+
+    tracking_information.append((avg_train_loss, avg_eval_loss, current_lr))
+    print(f"Epoch: {epoch+1} | Train Loss: {avg_train_loss:.4f} | Eval Loss: {avg_eval_loss:.4f} | LR: {current_lr}")
+    
+    # WandB 로깅
+    wandb.log({"Visual7w/epoch/train_loss": avg_train_loss,
+               "Visual7w/epoch/val_loss": avg_eval_loss,
+               "Visual7w/LR": current_lr,
+               "Visual7w/epoch": epoch+1 })
+    
+    # 스케줄러 업데이트
+    scheduler.step()
+
+    # 조기 종료 및 모델 저장
+    if avg_eval_loss < min_eval_loss:
+        min_eval_loss = avg_eval_loss
+        early_stopping_hook = 0
+        model.save_pretrained("Model/instructblip-lora")
+        model.base_model.save_pretrained('Model/instructblip-base')
+        processor.save_pretrained("Model/instructblip-processor")
+        print(f"Validation loss decreased ({min_eval_loss:.4f}). Saving model...")
+    else:
+        early_stopping_hook += 1
+        if early_stopping_hook >= patience:
+            print(f"Early stopping at epoch {epoch+1} as validation loss did not improve for {patience} epochs.")
+            break
+
+
+
+
+# 중간 메모리 정리
+del train_ds, val_ds, train_dataloader, valid_dataloader
+torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
 
 
 
@@ -274,14 +445,15 @@ dacon_ds = load_dataset("csv",  data_files="eg/train.csv", split='train')
 indices = list(range(len(dacon_ds)))        # 전체 데이터 인덱스 및 라벨 추출
 labels = [dacon_ds[i]['answer'] for i in indices]  # A/B/C/D 라벨
 
-# --- 2번째 훈련 루프 ---
+
+# --- 3번째 훈련 루프 ---
 # Stratified K-Fold 설정
 n_splits = 5
 skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
 
 # 학습 설정
-num_epochs = 20
-patience = 2
+num_epochs = 3
+patience = 1
 
 model.to(device)
 
@@ -310,7 +482,7 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1)
         optimizer.zero_grad()
         total_train_loss = 0
 
-        for batch in tqdm(train_loader, desc=f"Fold {fold} Epoch {epoch} [Train]"):
+        for batch in tqdm(train_loader, desc=f"Fold {fold} Epoch {epoch} [Train]", dynamic_ncols=True):
             # Move to device
             for k, v in batch.items():
                 batch[k] = v.to(device)
@@ -336,7 +508,7 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1)
         model.eval()
         total_val_loss = 0
         with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Fold {fold} Epoch {epoch} [Val]"):
+            for batch in tqdm(val_loader, desc=f"Fold {fold} Epoch {epoch} [Val]", dynamic_ncols=True):
                 for k, v in batch.items():
                     batch[k] = v.to(device)
                 outputs = model(
@@ -355,6 +527,12 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1)
               f"Train Loss: {avg_train_loss:.4f} | "
               f"Val Loss: {avg_val_loss:.4f} | "
               f"LR: {current_lr:.1e}")
+        
+        # WandB 로깅
+        wandb.log({"Official/epoch/train_loss": avg_train_loss,
+                   "Official/epoch/val_loss": avg_val_loss,
+                   "Official/LR": current_lr,
+                   "Official/epoch": epoch  })
 
         scheduler.step()
 
@@ -413,7 +591,7 @@ for _, row in tqdm(test.iterrows(), total=len(test)):
         do_sample=False,       # 샘플링 비활성화 (결정론적 빔 서치)
         num_beams=8,           # 8개의 빔을 사용하여 탐색
         early_stopping=True,   # 빔이 EOS에 도달하면 일찍 중지
-        max_new_tokens=20,     # 생성할 최대 새 토큰 수
+        max_new_tokens=50,     # 생성할 최대 새 토큰 수
         min_length=1,
         repetition_penalty=1.2,
         length_penalty=0.8,    # 적절한 길이의 답변 유도
