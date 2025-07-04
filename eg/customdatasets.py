@@ -2,6 +2,161 @@ import torch
 from PIL import Image
 
 
+# A-OKVQA 데이터셋
+class AokvqaDataset(torch.utils.data.Dataset):
+    """A-OKVQA dataset."""
+
+    def __init__(self, dataset, processor):
+        self.dataset = dataset
+        self.processor = processor
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        # get image + text
+        sample = self.dataset[idx]
+        answer_idx = sample['correct_choice_idx']
+        answer = sample['choices'][answer_idx]
+        image = sample['image'].convert('RGB')
+        prompt = f"""
+        <image>
+        Based on the image, choose the correct option to the following question.
+
+        Question: {sample['question']}
+
+        Options:
+        A. {sample['choices'][0]}
+        B. {sample['choices'][1]}
+        C. {sample['choices'][2]}
+        D. {sample['choices'][3]}
+
+        Answer:
+        """
+        encoding = self.processor(image, prompt, padding="max_length", max_length=512, truncation=True, return_tensors="pt")
+        
+        # remove batch dimension
+        encoding = {k: v.squeeze() for k, v in encoding.items()}
+        label_encoding = self.processor.tokenizer(
+            f'{chr(65+answer_idx)}. {answer}',
+            max_length=128, # 라벨의 최대 길이 (충분히 크게)
+            padding="max_length", # 여기서는 max_length 패딩이 적절
+            truncation=True,
+            return_tensors="pt"
+        )
+        encoding["labels"] = label_encoding.input_ids.squeeze(0)
+        encoding["labels"][encoding["labels"] == self.processor.tokenizer.pad_token_id] = -100
+        return encoding
+
+
+# 데이컨 데이터셋    
+class DaconDataset(torch.utils.data.Dataset):
+    """Official dataset from DACON."""
+
+    def __init__(self, dataset, processor):
+        self.dataset = dataset
+        self.processor = processor
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        # get image + text
+        sample = self.dataset[idx]
+        image = Image.open('eg/'+sample['img_path']).convert("RGB")
+        answer = sample[sample['answer'].strip()]
+        answer_idx = [sample['A'], sample['B'], sample['C'], sample['D']].index(answer)
+        
+        prompt = f"""
+        <image>
+        Based on the image, choose the correct option to the following question.
+
+        Question: {sample['Question']}
+
+        Options:
+        A. {sample['A']}
+        B. {sample['B']}
+        C. {sample['C']}
+        D. {sample['D']}
+
+        Answer:
+        """
+        encoding = self.processor(image, prompt, padding="max_length", max_length=512, truncation=True, return_tensors="pt")
+        
+        # remove batch dimension
+        encoding = {k: v.squeeze() for k, v in encoding.items()}
+        label_encoding = self.processor.tokenizer(
+            f'{chr(65+answer_idx)}. {answer}',
+            max_length=128, # 라벨의 최대 길이 (충분히 크게)
+            padding="max_length", # 여기서는 max_length 패딩이 적절
+            truncation=True,
+            return_tensors="pt"
+        )
+        encoding["labels"] = label_encoding.input_ids.squeeze(0)
+        encoding["labels"][encoding["labels"] == self.processor.tokenizer.pad_token_id] = -100
+        return encoding
+    
+    
+    
+# Visual 7w 데이터셋
+# 커스텀 데이터셋
+class VisualDataset(torch.utils.data.Dataset):
+    """Visual 7w dataset."""
+
+    def __init__(self, dataset, processor):
+        self.dataset = dataset
+        self.processor = processor
+        
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        # get image + text
+        sample = self.dataset[idx]
+        answer = sample['answer']
+        answer_idx = sample['choices'].index(answer)
+        image = Image.open(sample['img_path']).convert("RGB")
+        prompt = f"""
+        <image>
+        Based on the image, choose the correct option to the following question.
+
+        Question: {sample['question']}
+
+        Options:
+        A. {sample['choices'][0]}
+        B. {sample['choices'][1]}
+        C. {sample['choices'][2]}
+        D. {sample['choices'][3]}
+
+        Answer:
+        """
+        encoding = self.processor(image, prompt, padding="max_length", max_length=512, truncation=True, return_tensors="pt")
+        
+        # remove batch dimension
+        encoding = {k: v.squeeze() for k, v in encoding.items()}
+        label_encoding = self.processor.tokenizer(
+            f'{chr(65+answer_idx)}. {answer}',
+            max_length=128, # 라벨의 최대 길이 (충분히 크게)
+            padding="max_length", # 여기서는 max_length 패딩이 적절
+            truncation=True,
+            return_tensors="pt"
+        )
+        encoding["labels"] = label_encoding.input_ids.squeeze(0)
+        encoding["labels"][encoding["labels"] == self.processor.tokenizer.pad_token_id] = -100
+        return encoding
+    
+        
+def collate_fn(batch):
+    # 'pixel_values', 'qformer_input_ids', 'qformer_attention_mask', 'input_ids', 'attention_mask', 'labels'
+    # 이 모든 키들이 배치로 쌓여야 합니다.
+    processed_batch = {}
+    for key in batch[0].keys():
+        processed_batch[key] = torch.stack([sample[key] for sample in batch])
+        
+    return processed_batch
+
+
+
 # InstructBLIP은 일반적으로 답을 프롬프트에 포함하여 훈련합니다.
 # InstructBLIPProcessor는 이미지를 pixel_values로, 텍스트를 input_ids, attention_mask 등으로 변환합니다.
 # IMPORTANT: 'labels'는 모델의 타겟 아웃풋이므로, 이 프롬프트 자체를 인코딩할 때 포함시키지 않습니다.
@@ -33,105 +188,3 @@ from PIL import Image
 
 # AokvqaDataset.__getitem__에서는 `labels`를 정답 텍스트를 인코딩한 형태로 저장합니다.
 # 실제 모델 훈련 시에는 이 `labels`가 LLM의 출력과 비교됩니다.
-
-# 커스텀 데이터셋
-class AokvqaDataset(torch.utils.data.Dataset):
-    """A-OKVQA dataset."""
-
-    def __init__(self, dataset, processor):
-        self.dataset = dataset
-        self.processor = processor
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        # get image + text
-        sample = self.dataset[idx]
-        answer_idx = sample['correct_choice_idx']
-        answer = sample['choices'][answer_idx]
-        image = sample['image'].convert('RGB')
-        prompt = f"""
-        <image>
-        Based on the image, choose the correct option to the following question.
-
-        Question: {sample['question']}
-
-        Options:
-        A {sample['choices'][0]}
-        B {sample['choices'][1]}
-        C {sample['choices'][2]}
-        D {sample['choices'][3]}
-
-        Answer:
-        """
-        encoding = self.processor(image, prompt, padding="max_length", max_length=512, truncation=True, return_tensors="pt")
-        
-        # remove batch dimension
-        encoding = {k: v.squeeze() for k, v in encoding.items()}
-        label_encoding = self.processor.tokenizer(
-            answer,
-            max_length=128, # 라벨의 최대 길이 (충분히 크게)
-            padding="max_length", # 여기서는 max_length 패딩이 적절
-            truncation=True,
-            return_tensors="pt"
-        )
-        encoding["labels"] = label_encoding.input_ids.squeeze(0)
-        encoding["labels"][encoding["labels"] == self.processor.tokenizer.pad_token_id] = -100
-        return encoding
-
-    
-class DaconDataset(torch.utils.data.Dataset):
-    """Official dataset from DACON."""
-
-    def __init__(self, dataset, processor):
-        self.dataset = dataset
-        self.processor = processor
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        # get image + text
-        sample = self.dataset[idx]
-        image = Image.open('eg/'+sample['img_path']).convert("RGB")
-        answer = sample[sample['answer'].strip()]
-        
-        prompt = f"""
-        <image>
-        Based on the image, choose the correct option to the following question.
-
-        Question: {sample['Question']}
-
-        Options:
-        A {sample['A']}
-        B {sample['B']}
-        C {sample['C']}
-        D {sample['D']}
-
-        Answer:
-        """
-        encoding = self.processor(image, prompt, padding="max_length", max_length=512, truncation=True, return_tensors="pt")
-        
-        # remove batch dimension
-        encoding = {k: v.squeeze() for k, v in encoding.items()}
-        label_encoding = self.processor.tokenizer(
-            answer,
-            max_length=128, # 라벨의 최대 길이 (충분히 크게)
-            padding="max_length", # 여기서는 max_length 패딩이 적절
-            truncation=True,
-            return_tensors="pt"
-        )
-        encoding["labels"] = label_encoding.input_ids.squeeze(0)
-        encoding["labels"][encoding["labels"] == self.processor.tokenizer.pad_token_id] = -100
-        return encoding
-    
-    
-def collate_fn(batch):
-    # 'pixel_values', 'qformer_input_ids', 'qformer_attention_mask', 'input_ids', 'attention_mask', 'labels'
-    # 이 모든 키들이 배치로 쌓여야 합니다.
-    processed_batch = {}
-    for key in batch[0].keys():
-        processed_batch[key] = torch.stack([sample[key] for sample in batch])
-        
-    return processed_batch
