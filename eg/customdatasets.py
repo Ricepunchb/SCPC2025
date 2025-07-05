@@ -20,7 +20,6 @@ class AokvqaDataset(torch.utils.data.Dataset):
         answer = sample['choices'][answer_idx]
         image = sample['image'].convert('RGB')
         prompt = f"""
-        <image>
         Based on the image, choose the correct option to the following question.
 
         Question: {sample['question']}
@@ -68,7 +67,6 @@ class DaconDataset(torch.utils.data.Dataset):
         answer_idx = [sample['A'], sample['B'], sample['C'], sample['D']].index(answer)
         
         prompt = f"""
-        <image>
         Based on the image, choose the correct option to the following question.
 
         Question: {sample['Question']}
@@ -116,7 +114,6 @@ class VisualDataset(torch.utils.data.Dataset):
         answer_idx = sample['answer_idx']
         image = Image.open(sample['img_path']).convert("RGB")
         prompt = f"""
-        <image>
         Based on the image, choose the correct option to the following question.
 
         Question: {sample['question']}
