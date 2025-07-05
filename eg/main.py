@@ -20,9 +20,11 @@ from transformers import (InstructBlipForConditionalGeneration,
                           InstructBlipVisionConfig, 
                           InstructBlipQFormerConfig, 
                           T5Config,
-                          T5Tokenizer)
+                          T5Tokenizer,
+                          AddedToken,
+                          get_cosine_schedule_with_warmup)
 from datasets import load_dataset, Dataset
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model
 
 from customdatasets import AokvqaDataset, DaconDataset, VisualDataset, collate_fn
 
@@ -44,8 +46,8 @@ def seed_everything(seed=47):
 
 seed_everything()
 
-
-# 1. 기존 모델 config 로드
+# --------------------- 모델 선언부 -----------------------
+# 기존 모델 config 로드
 vision_config = InstructBlipVisionConfig.from_pretrained("Salesforce/instructblip-flan-t5-xl")
 qformer_config = InstructBlipQFormerConfig.from_pretrained("Salesforce/instructblip-flan-t5-xl")
 text_config = T5Config.from_pretrained("google/flan-t5-large")
@@ -54,89 +56,108 @@ text_config = T5Config.from_pretrained("google/flan-t5-large")
 text_config.is_encoder_decoder = True
 text_config.use_cache = True
 if not hasattr(text_config, 'bos_token_id') or text_config.bos_token_id is None:
-    text_config.bos_token_id = 1  # T5의 경우 보통 0
+    text_config.bos_token_id = 1
 
-# 2. 새로운 config로 InstructBLIP 모델 생성
+# config로 InstructBLIP 모델 생성
 config = InstructBlipConfig.from_vision_qformer_text_configs(
     vision_config, qformer_config, text_config
 )
 
-# 3. 빈 모델 초기화
+# 빈 모델 초기화
 model = InstructBlipForConditionalGeneration(config)
 
-print("모델 구조 초기화 완료")
-print(f"Vision model hidden size: {config.vision_config.hidden_size}")
-print(f"Q-Former hidden size: {config.qformer_config.hidden_size}")
-print(f"Text model hidden size: {config.text_config.hidden_size}")
+print("Model architecture initialized.")
 
-# 4. 사전 훈련된 컴포넌트들 로드
-print("사전 훈련된 가중치 로드 중...")
-
-# 전체 원본 InstructBLIP 모델 로드 (vision과 qformer 가중치 추출용)
+# 사전 훈련된 컴포넌트들 로드
+print("Loading pretrained checkpoints...")
+# 원본 InstructBLIP 모델 로드 (vision과 qformer 가중치 추출용)
 original_model = InstructBlipForConditionalGeneration.from_pretrained("Salesforce/instructblip-flan-t5-xl")
 
-# Vision model 가중치 복사
+# Vision model 가중치 계승
 model.vision_model.load_state_dict(original_model.vision_model.state_dict())
-print("✓ Vision model 가중치 로드 완료")
+print("✓ Vision model checkpoint loaded")
 
-# Q-Former 가중치 복사
+# Q-Former 가중치 계승
 model.qformer.load_state_dict(original_model.qformer.state_dict())
-print("✓ Q-Former 가중치 로드 완료")
+print("✓ Q-Former checkpoint loaded")
 
-# Language model 로드 (flan-t5-large)
+# LM (flan-t5-large) 가중치 계승 
 new_lm = T5ForConditionalGeneration.from_pretrained("google/flan-t5-large")
 model.language_model.load_state_dict(new_lm.state_dict())
-print("✓ Language model (flan-t5-large) 가중치 로드 완료")
+print("✓ Language model (flan-t5-large) checkpoint loaded")
 
 # 메모리 정리
 del original_model, new_lm
 torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-# 5. Language projection layer 재초기화
-# Q-Former의 출력을 새로운 language model의 입력 차원에 맞게 조정
-qformer_hidden_size = config.qformer_config.hidden_size  # 768
-text_hidden_size = config.text_config.hidden_size        # 1024 (flan-t5-large)
-
-# 기존 projection layer를 새로운 차원에 맞게 교체
-model.language_projection = nn.Linear(
-    qformer_hidden_size, 
-    text_hidden_size, 
-    bias=True
-)
-
-# Xavier uniform 초기화로 안정적인 학습 시작
+# projection layer를 Xavier uniform 초기화
 nn.init.xavier_uniform_(model.language_projection.weight)
-print(f"✓ Language projection layer 재초기화 완료: {qformer_hidden_size} -> {text_hidden_size}")
+print(f"✓ Language projection layer 재초기화 완료")
 
-# 6. 모델 검증
+# 모델 정보
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 print(f"\n모델 정보:")
 print(f"총 파라미터 수: {total_params:,}")
 
 
-
-
-# 기본적으로 기존 InstructBLIP processor 사용
-# tokenizer는 자동으로 flan-t5-large에 맞게 조정됨
+# --------------------- processor, tokenizer 편집부 -----------------------
+# # 원래 토크나이저에서 vocab 추출
 processor = InstructBlipProcessor.from_pretrained("Salesforce/instructblip-flan-t5-xl")
-xl_tokens = set(processor.tokenizer.get_vocab().keys())     # 원래 토크나이저에서 vocab 추출
-
 tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-large")
-large_tokens = set(tokenizer.get_vocab().keys())     # 바꿀 토크나이저가 원래 갖고있던 vocab 추출
-tokens_to_add = list(xl_tokens - large_tokens)      # 추가로 계승할 토큰
-num_added = tokenizer.add_tokens(tokens_to_add)   # 3) flan‑t5‑large 토크나이저에 추가
+
+# <image> 토큰 확인
+def check(tokenizer):
+    image_token_id = None
+    # 토크나이저에 <image> 토큰이 이미 있는지 확인
+    if "<image>" in tokenizer.get_vocab():
+        image_token_id = tokenizer.convert_tokens_to_ids("<image>")
+        print(f"'<image>' 토큰이 토크나이저 어휘에 이미 존재합니다. 인덱스: {image_token_id}")
+        # 해당 토큰이 special token인지 확인
+        if image_token_id in tokenizer.all_special_tokens:
+            print(f"'{image_token_id}' 토큰은 스페셜 토큰입니다.")
+        else:
+            print(f"'{image_token_id}' 토큰은 일반 토큰입니다 (하지만 모델 내부적으로는 특별하게 처리됨).")
+    else: print("!! <image> 토큰이 없음!!")
+    return image_token_id
+
+print('large의 경우: \n',check(tokenizer))
+print('기존 xl의 경우: \n',check(processor.tokenizer))
+
+xl_tokens = set(processor.tokenizer.get_vocab().keys())     # 기존. xl 모델의 토큰들
+large_tokens = set(tokenizer.get_vocab().keys())     # large 모델의 토큰들
+
+image_token = AddedToken("<image>", normalized=False, special=True)
+tokenizer.add_tokens([image_token], special_tokens=True)
+print(f"Added {image_token} to T5-Large tokenizer.")
+
+tokens_to_add = list(xl_tokens - large_tokens)      # 추가 계승할 토큰
+print("More tokens to success: ",tokens_to_add)
+
+num_added = tokenizer.add_tokens(tokens_to_add)   # flan‑t5‑large 토크나이저에 추가
 print(f"Added {num_added} tokens from flan-t5-xl into flan-t5-large tokenizer")
 
-processor.tokenizer = tokenizer
-model.resize_token_embeddings(len(tokenizer))  # LM head(임베딩) 크기 조정
-model.language_model.resize_token_embeddings(len(tokenizer))
-model.config.text_config.vocab_size = len(tokenizer)
-model.config.vocab_size = len(tokenizer)
-del tokenizer   # 메모리 정리
+processor.tokenizer = tokenizer     # 토크나이저 계승
+
+model.language_model.resize_token_embeddings(len(processor.tokenizer), pad_to_multiple_of=64)    # LM head(임베딩) 크기 리사이즈
+print(f"Language model embedding size resized to {len(processor.tokenizer)}.")
+
+image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")   # 토크나이저의 <image> 토큰 인덱스
+model.config.text_config.image_token_index = image_token_id
+model.config.image_token_index = image_token_id
+print(model.config.image_token_index, model.config.text_config.image_token_index)       # <image> 토큰 인덱스 위랑 확인, 이 두 숫자 같은지 확인
+
+model.config.text_config.vocab_size = len(processor.tokenizer)      # vocab size 업데이트
+model.config.vocab_size = len(processor.tokenizer)
+
+del tokenizer, xl_tokens, large_tokens   # 메모리 정리
 
 
+# 베이스 모델 저장. !!반드시 PEFT 적용전에 해야함!!
+model.base_model.save_pretrained('./Model/instructblip-base')
+
+
+# -------------------------PEFT LoRA 설정부----------------------------
 # PEFT-LoRA 적용
 target_module_names = [
     # Q-Former 내의 선형 레이어 (BERT-like 구조)
@@ -157,7 +178,7 @@ target_module_names = [
     "wo",               # T5 FFN의 출력 레이어
 
     # InstructBLIP 특정 레이어
-    "language_projection", # 당신이 정의한 Q-Former -> LLM 연결 projection 레이어
+    "language_projection", # Q-Former -> LLM 연결 projection
     "lm_head"             # 언어 모델의 최종 출력 헤드
 ]
 
@@ -173,6 +194,17 @@ print(model.print_trainable_parameters())
 
 del target_module_names     # 중간 메모리 정리
 
+
+# # ----------------------------------- [Optional] 모델 로드 ------------------------------------
+# processor = InstructBlipProcessor.from_pretrained("./Model/instructblip-processor")
+# model = InstructBlipForConditionalGeneration.from_pretrained('./Model/instructblip-base')
+
+# peft_model_path = "./Model/instructblip-lora"
+# model = PeftModel.from_pretrained(model, peft_model_path)
+# model.to('cuda')
+
+
+# ---------------------------------------- 훈련부 ---------------------------------------- 
 # WandB 시동
 wandb.init(project="SCPC 2025")
 wandb.watch(model, log="all", log_freq=50)
@@ -180,7 +212,7 @@ wandb.config.update({"nparams": sum([p.numel() for p in model.parameters() if p.
 
 batch_size = 2
 
-# A-OKVQA로 파인튜닝
+# -------------------------------------- A-OKVQA 훈련 --------------------------------------------
 train_ds = load_dataset("HuggingFaceM4/A-OKVQA", split="train")
 val_ds = load_dataset("HuggingFaceM4/A-OKVQA", split="validation")
 train_ds = AokvqaDataset(dataset=train_ds, processor=processor)
@@ -189,21 +221,29 @@ train_dataloader = DataLoader(train_ds, batch_size=batch_size, collate_fn = coll
 valid_dataloader = DataLoader(val_ds, batch_size=batch_size, collate_fn = collate_fn, pin_memory=True, num_workers=4)
 
 # --- 1번째 훈련 루프 ---
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
-scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
-
 num_epochs = 5 
-patience = 3
+patience = 2
 min_eval_loss = float("inf")
 early_stopping_hook = 0
 tracking_information = []
 gradient_accumulation_steps = 128 // batch_size
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
+# scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
+num_training_steps = int( len(train_dataloader) * num_epochs )                      
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer=optimizer,
+    num_warmup_steps=int(num_training_steps * 0.01),
+    num_training_steps=num_training_steps
+    )
+
 model.to(device)
+
+step = 1
 for epoch in range(num_epochs):
     # ========================= Training =========================
     model.train()
     
-    step = 1
     epoch_loss = 0
     
     for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]", dynamic_ncols=True):
@@ -227,8 +267,11 @@ for epoch in range(num_epochs):
         loss.backward()
         
         if step % gradient_accumulation_steps == 0 or step == len(train_dataloader):
+            wandb.log({'A-OKVQA/current_avg_loss': loss * gradient_accumulation_steps}, step=step)
             optimizer.step()
-            optimizer.zero_grad()
+            scheduler.step()
+            
+            optimizer.zero_grad()            
         
         epoch_loss += loss.item() * gradient_accumulation_steps
         
@@ -270,18 +313,16 @@ for epoch in range(num_epochs):
     wandb.log({"A-OKVQA/epoch/train_loss": avg_train_loss,
                "A-OKVQA/epoch/val_loss": avg_eval_loss,
                "A-OKVQA/LR": current_lr,
-               "A-OKVQA/epoch": epoch+1 })
+               "A-OKVQA/epoch": epoch+1},
+              step=step)
     
-    # 스케줄러 업데이트
-    scheduler.step()
 
     # 조기 종료 및 모델 저장
-    # Early stopping은 전체 loss 합이 아닌 평균 loss로 비교하는 것이 더 직관적입니다.
+    # Early stopping은 평균 loss로 비교하는 것이 더 직관적
     if avg_eval_loss < min_eval_loss:
         min_eval_loss = avg_eval_loss
         early_stopping_hook = 0
         model.save_pretrained("Model/instructblip-lora")
-        model.base_model.save_pretrained('Model/instructblip-base')
         processor.save_pretrained("Model/instructblip-processor")
         print(f"Validation loss decreased ({min_eval_loss:.4f}). Saving model...")
     else:
@@ -297,8 +338,8 @@ del train_ds, train_dataloader, val_ds, valid_dataloader
 torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
 
-
-# Visual 7w 데이터셋
+# -------------------------------------- Visual 7w 훈련 -----------------------------------------
+# Visual 7w 데이터셋 로드
 visual_ds = load_dataset("json", data_files="/mnt/workspace/datasets/visual7w/dataset_v7w_telling.json", split='train')
 # 데이터셋 전처리
 processed = []
@@ -329,23 +370,28 @@ valid_dataloader = DataLoader(val_ds, batch_size=batch_size, collate_fn = collat
 del processed   # 중간 메모리 정리
 
 # --- 2번째 훈련 루프 ---
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
-scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
-
 num_epochs = 5
-patience = 3
+patience = 2
 min_eval_loss = float("inf")
 early_stopping_hook = 0
 tracking_information = []
 gradient_accumulation_steps = 128 // batch_size
 
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
+num_training_steps = int(len(train_dataloader * num_epochs))                      
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer=optimizer,
+    num_warmup_steps=int(num_training_steps * 0.01),
+    num_training_steps=num_training_steps
+    )
+
 model.to(device)
 
+step = 1
 for epoch in range(num_epochs):
     # ========================= Training =========================
     model.train()
     
-    step = 1
     epoch_loss = 0
     
     for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]", dynamic_ncols=True):
@@ -368,7 +414,9 @@ for epoch in range(num_epochs):
         loss.backward()
         
         if step % gradient_accumulation_steps == 0 or step == len(train_dataloader):
+            wandb.log({'Visual7w/current_avg_loss': loss * gradient_accumulation_steps}, step=step)
             optimizer.step()
+            scheduler.step()
             optimizer.zero_grad()
         
         epoch_loss += loss.item() * gradient_accumulation_steps
@@ -411,17 +459,15 @@ for epoch in range(num_epochs):
     wandb.log({"Visual7w/epoch/train_loss": avg_train_loss,
                "Visual7w/epoch/val_loss": avg_eval_loss,
                "Visual7w/LR": current_lr,
-               "Visual7w/epoch": epoch+1 })
+               "Visual7w/epoch": epoch+1 },
+              step=step)
     
-    # 스케줄러 업데이트
-    scheduler.step()
 
     # 조기 종료 및 모델 저장
     if avg_eval_loss < min_eval_loss:
         min_eval_loss = avg_eval_loss
         early_stopping_hook = 0
         model.save_pretrained("Model/instructblip-lora")
-        model.base_model.save_pretrained('Model/instructblip-base')
         processor.save_pretrained("Model/instructblip-processor")
         print(f"Validation loss decreased ({min_eval_loss:.4f}). Saving model...")
     else:
@@ -431,13 +477,9 @@ for epoch in range(num_epochs):
             break
 
 
-
-
 # 중간 메모리 정리
 del train_ds, val_ds, train_dataloader, valid_dataloader
 torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-
 
 
 # DACON 에서 준 중요한 데이터셋
@@ -446,7 +488,7 @@ indices = list(range(len(dacon_ds)))        # 전체 데이터 인덱스 및 라
 labels = [dacon_ds[i]['answer'] for i in indices]  # A/B/C/D 라벨
 
 
-# --- 3번째 훈련 루프 ---
+# -------------------------------------- DACON 공식 데이터셋 훈련 -----------------------------------------
 # Stratified K-Fold 설정
 n_splits = 5
 skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
@@ -459,6 +501,7 @@ model.to(device)
 
 fold_results = []
 
+step = 1
 for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1):
     print(f"\n===== Fold {fold}/{n_splits} =====")
     # Subset 및 DataLoader
@@ -498,7 +541,10 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1)
             loss.backward()
 
             optimizer.step()
+            scheduler.step()
             optimizer.zero_grad()
+            
+            step += 1
 
             total_train_loss += loss.item()
 
@@ -532,17 +578,16 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1)
         wandb.log({"Official/epoch/train_loss": avg_train_loss,
                    "Official/epoch/val_loss": avg_val_loss,
                    "Official/LR": current_lr,
-                   "Official/epoch": epoch  })
+                   "Official/epoch": epoch  },
+                  step=step)
 
-        scheduler.step()
-
+        
         # Early Stopping
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             patience_counter = 0
             # 체크포인트 저장
             model.save_pretrained('./Model/instructblip-lora')
-            model.base_model.save_pretrained('./Model/instructblip-base')
             processor.save_pretrained('./Model/instructblip-processor')
         else:
             patience_counter += 1
@@ -560,14 +605,13 @@ print(f"Mean Val Loss: {sum(fold_results)/len(fold_results):.4f}")
         
         
 
-
 # 추론
 test = pd.read_csv('eg/test.csv')
 results = []
 
 # 정답 알파벳 추출 함수
 def extract_answer_letter(text):
-    match = re.search(r"\s*([A-Da-d])\b", text)
+    match = re.search(r"\s*([A-Da-d])\.\s*", text)
     return match.group(1).upper() if match else "?"
 
 
@@ -576,7 +620,6 @@ for _, row in tqdm(test.iterrows(), total=len(test)):
     choices = [row[c] for c in ['A', 'B', 'C', 'D']]
 
     prompt = (
-        "<image>\n"
         "Based on the image, choose the correct option to the following question.\n"
         f"Question: {row['Question']}\n"
         "Options:"
@@ -597,11 +640,14 @@ for _, row in tqdm(test.iterrows(), total=len(test)):
         length_penalty=0.8,    # 적절한 길이의 답변 유도
         )
     decoded = processor.tokenizer.decode(output[0], skip_special_tokens=True).strip()
-    print(decoded)
-    results.append(extract_answer_letter(decoded))
+    answer = extract_answer_letter(decoded)
+    results.append(answer)
+    tqdm.write(f"{decoded}")
+    tqdm.write(f"Answer: {answer} \n")
 
 print('✅ Inference Done.')
 
+# submission용 CSV 만들기
 submission = pd.read_csv('eg/sample_submission.csv')
 submission['answer'] = results
 submission.to_csv('eg/baseline_submit.csv', index=False)
