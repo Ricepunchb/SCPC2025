@@ -1,5 +1,6 @@
 datasets/
 Model/
+wandb/
 
 eg/Model
 eg/test_input_images
