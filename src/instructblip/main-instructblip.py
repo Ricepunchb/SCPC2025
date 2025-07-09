@@ -154,7 +154,7 @@ del tokenizer, xl_tokens, large_tokens   # 메모리 정리
 
 
 # 베이스 모델 저장. !!반드시 PEFT 적용전에 해야함!!
-model.base_model.save_pretrained('./Model/instructblip-base')
+model.save_pretrained('./Model/instructblip-base')
 
 
 # -------------------------PEFT LoRA 설정부----------------------------
@@ -228,13 +228,12 @@ early_stopping_hook = 0
 tracking_information = []
 gradient_accumulation_steps = 128 // batch_size
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
-# scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
-num_training_steps = int( len(train_dataloader) * num_epochs )                      
+update_steps = ( len(train_dataloader) + gradient_accumulation_steps - 1 ) // gradient_accumulation_steps * num_epochs
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)                    
 scheduler = get_cosine_schedule_with_warmup(
     optimizer=optimizer,
-    num_warmup_steps=int(num_training_steps * 0.01),
-    num_training_steps=num_training_steps
+    num_warmup_steps=int(update_steps * 0.01),
+    num_training_steps=update_steps
     )
 
 model.to(device)
@@ -376,13 +375,13 @@ min_eval_loss = float("inf")
 early_stopping_hook = 0
 tracking_information = []
 gradient_accumulation_steps = 128 // batch_size
-
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)
-num_training_steps = int(len(train_dataloader * num_epochs))                      
+  
+update_steps = ( len(train_dataloader) + gradient_accumulation_steps - 1 ) // gradient_accumulation_steps * num_epochs
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0.05)  
 scheduler = get_cosine_schedule_with_warmup(
     optimizer=optimizer,
-    num_warmup_steps=int(num_training_steps * 0.01),
-    num_training_steps=num_training_steps
+    num_warmup_steps=int(update_steps * 0.01),
+    num_training_steps=update_steps
     )
 
 model.to(device)
@@ -605,7 +604,7 @@ print(f"Mean Val Loss: {sum(fold_results)/len(fold_results):.4f}")
         
         
 
-# 추론
+# ----------------------------------------------- 제출용 추론 --------------------------------------------------
 test = pd.read_csv('eg/test.csv')
 results = []
 
