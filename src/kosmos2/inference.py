@@ -43,8 +43,12 @@ def main():
     seed_everything()
     
     # ----------------------------------------------- 제출용 추론 --------------------------------------------------
-    model = Kosmos2ForConditionalGeneration.from_pretrained("Model/merged_model", torch_dtype=torch.bfloat16, device_map="auto" )
-    processor = AutoProcessor.from_pretrained("microsoft/kosmos-2-patch14-224")
+    # 베스트 모델 로드
+    final_save_directory = os.path.join("Models/kosmos2", "final_best_model")
+    peft_config = PeftConfig.from_pretrained(final_save_directory)     # 훈련후 best checkpoint
+    model = Kosmos2ForConditionalGeneration.from_pretrained("microsoft/kosmos-2-patch14-224", torch_dtype=torch.bfloat16, device_map="auto" )   # 베이스모델 로드
+    model = PeftModel.from_pretrained(model, final_save_directory, torch_dtype=torch.bfloat16, device_map="auto" )        # LoRA weight 적용된 모델 로드
+    processor = AutoProcessor.from_pretrained(final_save_directory)
     
     test = pd.read_csv('eg/test.csv')
     results = []
