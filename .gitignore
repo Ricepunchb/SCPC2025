@@ -1,10 +1,13 @@
 datasets/
 Model/
 wandb/
+results/
+output.txt
 
 eg/Model
 eg/test_input_images
 eg/train_input_images
 eg/sample_submission.csv
 eg/baseline_submit.csv
-eg/__pycache__/
+
+**/__pycache__/
