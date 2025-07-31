@@ -33,4 +33,9 @@ unzip "$V7W_IMAGES_ZIP" -d "$DOWNLOAD_DIR"
 # 압축 파일 삭제
 rm "$V7W_JSON_ZIP"
 rm "$V7W_IMAGES_ZIP"
+
 echo "visual 7w dataset download success."
+
+# 압축 해제
+echo "Unzipping DACON dataset..."
+unzip "eg/open.zip" -d "eg/"
