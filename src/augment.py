@@ -3,10 +3,11 @@ import torchvision.transforms as T
 from PIL import Image
 from torchvision.transforms.functional import InterpolationMode
 from transformers import AutoModel, AutoTokenizer
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 import os
 import json
 from tqdm import tqdm
+import pandas as pd
 
 
 IMAGENET_MEAN = (0.5, 0.5, 0.5)
@@ -95,10 +96,22 @@ def main(mode):
 
     generation_config = dict(min_new_tokens=20, max_new_tokens=128, repetition_penalty=1.2, length_penalty = 1.1, do_sample=False, num_beams=3)
     
+    def add_description_to_sample(sample):
+            image = sample['image']
+            transform = build_transform(input_size=384)
+            images = dynamic_preprocess(image, image_size=384, use_thumbnail=True, max_num=10)
+            pixel_values = [transform(image) for image in images]
+            pixel_values = torch.stack(pixel_values).to(torch.bfloat16).cuda()
+
+            question = '<image>         Describe the image in detail.'
+            response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=None, return_history=True)
+            print(response)
+            sample['description'] = response
+            return sample
     
     # visual 7w의 경우
     if mode == 'visual7w':
-        ds = load_dataset("json", data_files="datasets/visual7w/dataset_v7w_telling.json", split='train[17457:]')
+        ds = load_dataset("json", data_files="datasets/visual7w/dataset_v7w_telling.json", split='train[:17457]')
         ds = ds['images']
         output_jsonl_path = os.path.join("datasets/visual7w","visual7w_augmented_with_descriptions.jsonl")
 
@@ -120,19 +133,6 @@ def main(mode):
         ds = load_dataset("suyc21/VMCBench", split='dev')
         ds.remove_columns(["index", "category"])
         output_path = os.path.join("datasets/VMC/VMC_aug")
-
-        def add_description_to_sample(sample):
-            image = sample['image']
-            transform = build_transform(input_size=384)
-            images = dynamic_preprocess(image, image_size=384, use_thumbnail=True, max_num=10)
-            pixel_values = [transform(image) for image in images]
-            pixel_values = torch.stack(pixel_values).to(torch.bfloat16).cuda()
-
-            question = '<image>         Describe the image in detail.'
-            response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=None, return_history=True)
-            print(response)
-            sample['description'] = response
-            return sample
         
         ds = ds.map(add_description_to_sample, batched=False, desc="Adding descriptions")
         ds.save_to_disk(output_path)
@@ -141,24 +141,32 @@ def main(mode):
     elif mode == 'realworld':
         ds = load_dataset("xai-org/RealworldQA", split='test')
         output_path = os.path.join("datasets/Realworld/Realworld_aug")
+        
+        ds = ds.map(add_description_to_sample, batched=False, desc="Adding descriptions")
+        ds.save_to_disk(output_path)
+        
+    elif mode == "dacon":
+        df = pd.read_csv("eg/train.csv")
+        ds = Dataset.from_pandas(df)
 
-        def add_description_to_sample(sample):
-            image = sample['image']
-            transform = build_transform(input_size=384)
-            images = dynamic_preprocess(image, image_size=384, use_thumbnail=True, max_num=10)
-            pixel_values = [transform(image) for image in images]
-            pixel_values = torch.stack(pixel_values).to(torch.bfloat16).cuda()
+        output_jsonl_path = os.path.join("eg", "train_aug.jsonl")
+
+        for _, sample in tqdm(enumerate(ds)):
+            image_path = os.path.join('eg', sample['img_path'])
+            pixel_values = load_image(image_path).to(torch.bfloat16).cuda()
 
             question = '<image>         Describe the image in detail.'
             response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=None, return_history=True)
             print(response)
             sample['description'] = response
-            return sample
-        
-        ds = ds.map(add_description_to_sample, batched=False, desc="Adding descriptions")
-        ds.save_to_disk(output_path)
 
+            with open(output_jsonl_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+    
+    else:
+        print("Invalid mode name.")
 
 
 if __name__ == '__main__':
-    main('realworld')     # VMC, realworld, visual7w
+    for mode_name in ["visual7w", "VMC", "realworld", "dacon"]:
+        main(mode_name)
