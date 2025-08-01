@@ -126,6 +126,12 @@ def main():
     processor = AutoProcessor.from_pretrained(kosmos_directory, use_fast=True)
     print("✅ KOSMOS-2 loaded")
     
+    # 모델 정보
+    kosmos_trainable_params, kosmos_all_params = kosmos.get_nb_trainable_parameters()
+    flan_t5_params = sum(p.numel() for p in flan_t5.parameters())
+    print(f"모델 정보:")
+    print(f"총 파라미터 수: {kosmos_all_params} + {flan_t5_params} \n = {kosmos_all_params + flan_t5_params:,}")
+    
     if hasattr(torch, 'compile'):       # 추론 속도 최적화를 위한 torch compile
         print("Compiling models with torch.compile...")
         kosmos = torch.compile(kosmos)
@@ -204,11 +210,7 @@ def main():
     submission.to_csv('results/submission.csv', index=False, encoding='utf-8')
     print("✅ CSV for submission Done.")
     
-    # 모델 정보
-    kosmos_params = sum(p.numel() for p in kosmos.parameters())
-    flan_t5_params = sum(p.numel() for p in flan_t5.parameters())
-    print(f"모델 정보:")
-    print(f"총 파라미터 수: {kosmos_params + flan_t5_params:,}")
+    
 
 
 if __name__ == "__main__":

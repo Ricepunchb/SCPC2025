@@ -192,7 +192,7 @@ class RecapCOCODataset(torch.utils.data.Dataset):
     """
     UCSC-VLAA/Recap-COCO-30K
     https://huggingface.co/datasets/UCSC-VLAA/Recap-COCO-30K
-    License: cc-by-4.0 아마도?
+    License: cc-by-4.0
         반드시 저작자 표시(출처)를 해야 합니다.
     """
 
