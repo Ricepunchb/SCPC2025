@@ -6,16 +6,10 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from PIL import Image
-from collections import Counter
-from datasets import load_dataset
 import torch
 
 from transformers import AutoProcessor, Kosmos2ForConditionalGeneration, T5ForConditionalGeneration, T5Tokenizer, BitsAndBytesConfig
 from peft import PeftModel
-
-from torch.utils.data import ConcatDataset, DataLoader
-
-from customdatasets import *
 
 
 # 정답 알파벳 추출 함수
@@ -172,7 +166,6 @@ def main():
                 temperature=0.5,
                 min_new_tokens=25,      
                 max_new_tokens=1024,
-                # num_beams
                 )
         
         generated_text = processor.batch_decode(output, skip_special_tokens=True)[0]
@@ -188,13 +181,7 @@ def main():
                     **inputs,
                     use_cache=True,
                     do_sample=False,
-                    # top_k=50,
-                    # top_p=0.95,
-                    # temperature=0.8,
                     num_beams=3,            # 3빔 서치
-                    # num_return_sequences=1,
-                    # max_new_tokens = 2048,
-                    # no_repeat_ngram_size = 4
                     )
         answer = tokenizer.decode(output[0], skip_special_tokens=True)
         final_answer = extract_answer_letter(answer)
