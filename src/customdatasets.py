@@ -84,11 +84,9 @@ class VisualDataset(torch.utils.data.Dataset):
     """
     Visual 7w dataset class
     https://github.com/yukezhu/visual7w-toolkit
-    License: MIT 아마도?
+    License: MIT
         상업적, 비상업적 모두 자유롭게 사용, 수정, 배포 가능합니다.
         소프트웨어를 사용하거나 배포할 때 저작권 고지 및 원본 MIT 라이선스 문구를 포함하는 것만 의무
-    Visual Genome	CC BY 4.0
-    COCO	CC BY 4.0 (일반적으로)
     """
 
     def __init__(self, dataset):

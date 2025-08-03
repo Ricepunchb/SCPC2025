@@ -273,8 +273,8 @@ def main():
     batch_size = 32
 
     training_args = SFTConfig(
-        report_to='wandb',
-        run_name = 'run-0729-SOTA' + "-phase_1_QLoRA_NF4",
+        report_to='none',
+        # run_name = 'run-0729-SOTA' + "-phase_1_QLoRA_NF4",
         output_dir="Model/kosmos2/sota/phase_1",
         overwrite_output_dir=True,
         num_train_epochs=2,     # epochs
@@ -360,8 +360,8 @@ def main():
     
     batch_size = 28
     training_args = SFTConfig(
-        report_to='wandb',
-        run_name = 'run-0729-SOTA' + "-phase_2_QLoRA_NF4",
+        report_to='none',
+        # run_name = 'run-0729-SOTA' + "-phase_2_QLoRA_NF4",
         output_dir="Model/kosmos2/sota/phase_2",
         overwrite_output_dir=True,
         num_train_epochs=2,     # epochs
