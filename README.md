@@ -10,7 +10,7 @@
 
     2. Reasoning & QA: Large Language Model (Flan-T5-Large)이 생성된 묘사, 질문, 선택지를 읽고 최종 정답을 추론
 
-- **최적화**: QLoRA (4-bit quantization), Flash Attention, torch.compile 등을 활용하여 추론 속도 및 메모리 효율성 극대화
+- **최적화**: QLoRA (4-bit quantization), Flash Attention, `torch.compile` 등을 활용하여 추론 속도 및 메모리 효율성 극대화
 
 ## 개발 및 실행 환경
 이 코드는 다음 환경에서 테스트되었습니다.
